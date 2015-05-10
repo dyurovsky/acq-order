@@ -1,0 +1,258 @@
+---
+title: "Cross-linguistic variation in early word learning"
+author: "Daniel Yurovsky, Mika Braginsky, Virginia Marchman, & Michael C. Frank"
+date: "2015-05-08"
+output:
+  html_document:
+  highlight: tango
+theme: spacelab
+---
+
+Baby's First 10 Words Cross-linguistic
+
+```{r setup, include=FALSE}
+library(knitr)
+options(digits = 2)
+opts_chunk$set(message=FALSE, warning=FALSE, cache=TRUE)
+```
+
+Load required libraries.
+```{r librares, cache=FALSE}
+library(dplyr)
+library(directlabels)
+library(RMySQL)
+library(tidyr)
+library(bootstrap)
+library(ggplot2)
+library(RCurl)
+library(magrittr)
+```
+
+Get a script that provides interface functions for pulling data out of Wordbank.
+```{r wordbank.funs, cache=FALSE}
+url <- 'https://raw.githubusercontent.com/langcog/wordbank/master/shiny_apps/data_loading.R'
+script <- getURL(url, ssl.verifypeer = FALSE)
+eval(parse(text = script))
+```
+
+Connect to the Wordbank database.
+```{r connect, cache=FALSE}
+wordbank <- connect.to.wordbank("prod")
+```
+
+Load tables
+```{r tables}
+common.tables <- get.common.tables(wordbank)
+instrument.tables <- get.instrument.tables(wordbank, common.tables)
+
+admins <- get.administration.data(common.tables)
+items <- get.item.data(common.tables)
+```
+
+Filter down to appropriate kids
+```{r}
+vocab.admins <- admins %>%
+  select(data_id, language, form, age, sex, production) %>%
+  filter(form == "WG", !is.na(sex), sex != "", age >= 8, age <=16)
+```
+
+Function that get's one language's data from wordbank
+```{r}
+get.language.data <- function(lang, vocab.data) {
+  
+  lang.table <- filter(instrument.tables, language==lang, form=="WG")$table[[1]]
+  
+  words <- items %>%
+    filter(type == "word", language == lang, form == "WG") %>%
+    select(definition,item.id,uni_lemma,category) %>%
+    rename(item_id = item.id)
+  
+  lang.data<- lang.table %>%
+    filter(basetable_ptr_id %in% vocab.data$data_id ) %>%
+    select_(.dots=c("basetable_ptr_id",words$item_id)) %>%
+    as.data.frame %>% 
+    gather(item_id,value,-basetable_ptr_id) %>%
+    rename(data_id = basetable_ptr_id) %>%
+    left_join(vocab.data)
+  
+  return(select(left_join(lang.data,words),-item_id))
+
+  }
+```
+
+
+Look at age distributions
+```{r,fig.width=3,fig.height=8}
+# all.by.age <- vocab.admins %>%
+#   group_by(language,age) %>%
+#   summarise(all.n = n())
+# 
+# age.hists <- vocab.data %>%
+#   group_by(language,age) %>%
+#   summarise(n = n()) %>%
+#   left_join(all.by.age) %>%
+#   mutate(prop = n/all.n) %>%
+#   mutate(prop = prop/sum(prop))
+# 
+# ggplot(data = age.hists,aes(x=age,y=prop)) +
+#   facet_grid(language ~ .) +
+#   geom_histogram(stat="identity",
+#                  fill="steelblue") +
+#   geom_vline(xintercept=12,linetype="dashed")+
+#   scale_x_continuous(limits=c(8,16),breaks=seq(8,16),name="Age (months)") +
+#   scale_y_continuous(name = "Proportion of Children") +
+#   theme_bw()+
+#   theme(panel.grid=element_blank()) 
+```
+
+Get all data
+```{r}
+languages <- c("English","Norwegian")
+all.data <- bind_rows(sapply(languages, 
+                             function(lang) get.language.data(lang,vocab.admins),
+                             simplify = FALSE))
+
+
+production.data <- all.data %>%
+  ungroup() %>%
+  mutate(language = factor(language)) %>%
+  group_by(language,category,uni_lemma,definition) %>%
+  summarise(prop = mean(value == "produces",na.rm=TRUE)) %>%
+  summarise(prop = max(prop,na.rm=TRUE)) %>%
+  spread(language,prop) %>%
+  filter(!is.na(English),!is.na(Norwegian)) %>%
+  gather(language,prop,English:Norwegian) %>%
+  group_by(language) %>%
+  arrange(desc(prop)) %>%
+  mutate(order = 1:n()) %>%
+  rowwise() %>%
+  mutate(comb.lemma = paste0(category,"-",uni_lemma))
+
+cors <- rep(0,length(unique(production.data$comb.lemma)))
+
+for(i in 1:length(cors)) {
+  eng.orders <-  filter(production.data,language=="English",order <= i)
+  nor.orders <- filter(production.data,language=="Norwegian",
+                       comb.lemma %in% unique(eng.orders$comb.lemma))
+  
+  diff <- bind_rows(eng.orders,nor.orders) %>%
+    group_by(comb.lemma) %>%
+    summarise(diff = max(order) - min(order)) %>%
+    summarise(diff = mean(diff))
+  
+  cors[i] <- diff[[1]]
+}
+
+cors <- data.frame(order=1:length(cors),distance=cors)
+```
+
+
+```{r}
+quartz(width=6,height=4)
+ggplot(data=cors,aes(x=order,y=distance)) +
+  geom_point()+
+  theme_bw()+
+  theme(panel.grid=element_blank())
+```
+
+
+
+
+kids.by.lang <- vocab.data %>%
+  group_by(language) %>%
+  summarise(num.kids = n())
+
+produced.data <- all.data %>%
+  filter(value == "produces") %>%
+  group_by(language,category,definition,gloss) %>%
+  summarise(mean.age = mean(age),
+            n = n()) %>%
+  group_by(language) %>%
+  left_join(kids.by.lang) %>%
+  mutate(prop = n/num.kids) %>%
+  arrange(desc(prop))
+```
+
+Top words
+```{r}
+top.words <- produced.data %>%
+  slice(1:10) %>%
+  select(language,gloss,prop,definition)
+
+tab.words <- top.words %>%
+  mutate(order = 1:10) %>%
+  rowwise() %>%
+  mutate(word = paste0(gloss," (",round(prop,digits=2),")")) %>%
+  select(language,word,order) %>%
+  spread(language,word) %>%
+  select(-order)
+
+kable(tab.words)
+```
+
+Models
+```{r,}
+model.words <- items %>%
+  select(definition,language,gloss,category) %>%
+  filter(language %in% unique(produced.data$language)) %>%
+  left_join(produced.data) %>%
+  rowwise() %>%
+  mutate(n = as.numeric(ifelse(is.na(n),0,n)),
+         prop = as.numeric(ifelse(is.na(prop),0,prop)),
+         len = nchar(definition))
+
+outputs <- NULL
+components = c("count","zero")
+params = c("len")
+
+languages <- unique(model.words$language) 
+
+predict.params <- expand.grid(language = languages,
+                              component = components,
+                              param = params)%>%
+  arrange(language,component,param)
+
+for(lang in languages) {
+  
+  hurd <- hurdle(n ~ len, 
+                 data = filter(model.words,language==lang))
+  
+
+
+  for(component in components) {
+
+    model.outs <- summary(hurd)$coefficients[as.character(component)][[1]]
+    
+    outputs <- rbind(outputs,model.outs[c("len"),
+                                        c("Estimate", "Std. Error","Pr(>|z|)")])
+  }
+    
+}
+colnames(outputs) = c("estimate","se","p")
+
+predict.params <- cbind(predict.params,outputs) %>%
+  mutate(ci = 1.96*se) %>%
+  mutate(component = factor(component, labels = c("Count Estimate", "Hurdle")))
+```
+
+Plot parameters
+```{r, fig.width=5.5, fig.height=5}
+ggplot(data = predict.params, 
+       aes(x = language, y = estimate, fill=component))+
+  geom_histogram(stat="identity",position="identity")+
+  geom_linerange(aes(ymax =estimate+ci,
+                      ymin = estimate-ci)) +
+  facet_grid(component ~ param)+
+  ylab("Parameter Estimate (+/- 95% CI)")+
+  xlab("Dataset") + 
+  geom_hline(yintercept=0, lty=2,size=.7) + 
+  #scale_color_brewer(name="Dataset",palette="Set1")+
+  scale_fill_brewer(palette="Set1")+
+  theme_bw(base_size=14) +
+  theme(legend.position="none",
+        axis.text.x = element_text(angle=-45, hjust = 0),
+        axis.title.x = element_text(vjust=-0.5),
+        panel.grid = element_blank())
+```
+
+
