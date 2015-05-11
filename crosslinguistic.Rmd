@@ -1,7 +1,7 @@
 ---
 title: "Cross-linguistic variation in early word learning"
 author: "Daniel Yurovsky, Mika Braginsky, Virginia Marchman, & Michael C. Frank"
-date: "2015-05-08"
+date: "2015-05-10"
 output:
   html_document:
   highlight: tango
@@ -26,6 +26,8 @@ library(bootstrap)
 library(ggplot2)
 library(RCurl)
 library(magrittr)
+library(readr)
+library(stringr)
 ```
 
 Get a script that provides interface functions for pulling data out of Wordbank.
@@ -64,18 +66,19 @@ get.language.data <- function(lang, vocab.data) {
   
   words <- items %>%
     filter(type == "word", language == lang, form == "WG") %>%
-    select(definition,item.id,uni_lemma,category) %>%
+    select(definition,item.id,uni_lemma,category,lexical_category) %>%
     rename(item_id = item.id)
   
-  lang.data<- lang.table %>%
-    filter(basetable_ptr_id %in% vocab.data$data_id ) %>%
-    select_(.dots=c("basetable_ptr_id",words$item_id)) %>%
+  lang.data <- lang.table %>%
+    filter(basetable_ptr_id %in% vocab.data$data_id) %>%
+    select_(.dots=c("basetable_ptr_id", words$item_id)) %>%
     as.data.frame %>% 
-    gather(item_id,value,-basetable_ptr_id) %>%
+    gather(item_id, value, -basetable_ptr_id) %>%
     rename(data_id = basetable_ptr_id) %>%
+    mutate(value = ifelse(is.na(value), "", value)) %>%
     left_join(vocab.data)
   
-  return(select(left_join(lang.data,words),-item_id))
+  return(left_join(lang.data,words))
 
   }
 ```
@@ -107,57 +110,177 @@ Look at age distributions
 
 Get all data
 ```{r}
-languages <- c("English","Norwegian")
+languages <- c("English", "Norwegian", "Croatian", "Spanish")
 all.data <- bind_rows(sapply(languages, 
                              function(lang) get.language.data(lang,vocab.admins),
                              simplify = FALSE))
 
-
-production.data <- all.data %>%
-  ungroup() %>%
-  mutate(language = factor(language)) %>%
-  group_by(language,category,uni_lemma,definition) %>%
-  summarise(prop = mean(value == "produces",na.rm=TRUE)) %>%
-  summarise(prop = max(prop,na.rm=TRUE)) %>%
-  spread(language,prop) %>%
-  filter(!is.na(English),!is.na(Norwegian)) %>%
-  gather(language,prop,English:Norwegian) %>%
-  group_by(language) %>%
-  arrange(desc(prop)) %>%
-  mutate(order = 1:n()) %>%
-  rowwise() %>%
-  mutate(comb.lemma = paste0(category,"-",uni_lemma))
-
-cors <- rep(0,length(unique(production.data$comb.lemma)))
-
-for(i in 1:length(cors)) {
-  eng.orders <-  filter(production.data,language=="English",order <= i)
-  nor.orders <- filter(production.data,language=="Norwegian",
-                       comb.lemma %in% unique(eng.orders$comb.lemma))
-  
-  diff <- bind_rows(eng.orders,nor.orders) %>%
-    group_by(comb.lemma) %>%
-    summarise(diff = max(order) - min(order)) %>%
-    summarise(diff = mean(diff))
-  
-  cors[i] <- diff[[1]]
-}
-
-cors <- data.frame(order=1:length(cors),distance=cors)
+get.lang.lemmas <- function(lang) unique(filter(all.data, language == lang)$uni_lemma)
+common.lemmas <- Reduce(intersect, sapply(languages, get.lang.lemmas))
 ```
-
 
 ```{r}
-quartz(width=6,height=4)
-ggplot(data=cors,aes(x=order,y=distance)) +
-  geom_point()+
-  theme_bw()+
-  theme(panel.grid=element_blank())
+order.data <- all.data %>%
+  ungroup() %>%
+  filter(uni_lemma %in% common.lemmas) %>%
+  mutate(language = factor(language)) %>%
+  group_by(language, lexical_category,category, uni_lemma,item_id) %>%
+  summarise(produces = mean(value == "produces"),
+            understands = mean(value == "produces" | value == "understands"),
+            only.understands = mean(value == "understands")) %>%
+  summarise(produces = max(produces),
+            understands = max(understands),
+            only.understands = max(only.understands)) %>%
+  gather(measure, prop, produces, understands, only.understands) %>%
+  group_by(language, measure) %>%
+  mutate(order = rank(-prop))
+
+unilemma.order <- order.data %>%
+  group_by(measure, uni_lemma) %>%
+  summarise(mean.order = mean(order))
+
+order.mean.data <- order.data %>%
+  left_join(unilemma.order) %>%
+  arrange(mean.order)
+
+random.language <- order.mean.data %>%
+  filter(language == "English") %>%
+  ungroup() %>%
+  mutate(order = mean(order),
+         language = "Random")
+
+# mean.language <- order.mean.data %>%
+#   filter(language == "English") %>%
+#   ungroup() %>%
+#   mutate(order = mean.order,
+#          language = "Mean")
+
+baseline.order.data <- order.mean.data %>%
+  bind_rows(random.language) %>%
+#  bind_rows(mean.language) %>%
+  mutate(order.diff = abs(order - mean.order)) %>%
+  group_by(language, measure) %>%
+  arrange(mean.order) %>%
+  mutate(mean.order.diff = cumsum(order.diff))
+# 
+# 
+# cum.tau <- function(order.num) {
+#   
+#   order.mean.data %>%
+#     group_by(language, measure) %>%
+#     slice(1:order.num) %>%
+#     summarise(tau = cor(order, mean.order, method = "kendall")) %>%
+#     mutate(order.num = order.num)
+# }
+#   
+# taus <- bind_rows(sapply(2:length(common.lemmas),cum.tau,simplify = FALSE))
+# 
+# ggplot(taus,aes(x = order.num,y=tau,color=language)) +
+#   facet_wrap(~ measure) + 
+#   geom_point()
 ```
 
+```{r}
+eng.freqs <- read.csv('english.freqs.csv') %>%
+  gather(word, count) %>%
+  group_by(word) %>%
+  summarize(frequency = mean(count)) %>%
+  ungroup() %>%
+  mutate(word = str_trim(tolower(gsub('\\.', ' ', word))))
+
+freqs.data <- order.mean.data %>%
+  select(-prop,-mean.order) %>%
+  spread(language,order) %>%
+  group_by(language,measure,uni_lemma) %>%
+  
+  filter(uni_lemma %in% common.lemmas) %>%
+  mutate(word = gsub(' \\(.*\\)', '', uni_lemma)) %>%
+  left_join(eng.freqs) %>%
+  filter(!is.na(frequency)) %>%
+  group_by(measure) %>%
+  mutate(freq.order = rank(-frequency)) %>%
+  left_join(unilemma.order)
+
+freqs.prod.data <- filter(freqs.data,measure=="produces")
+
+model.norwegian <- lm(English ~ Norwegian,data=measure.data))$r.squared
 
 
+cum.model <- function(order.num) {
 
+  nor.r2 <- function(measure.data) {summary(lm(English ~ Norwegian,
+                                            data=measure.data))$r.squared} 
+  
+  freq.r2 <- function(measure.data) {summary(lm(English~freq.order*category,
+                                             data=measure.data))$r.squared} 
+  
+  both.r2 <- function(measure.data) {
+    summary(lm(English ~ Norwegian + freq.order*category, 
+               data=measure.data))$r.squared} 
+  
+  freqs.data %>%
+    group_by(measure) %>%
+    slice(1:order.num) %>%
+    do(norwegian = nor.r2(.),
+       freq = freq.r2(.),
+       both = both.r2(.)) %>%
+   # mutate(order.num=order.num)
+    mutate(norwegian = norwegian[[1]],
+           freq = freq[[1]],
+           both = both[[1]],
+           order.num = order.num)
+}
+
+
+  
+r2s <- bind_rows(sapply(10:length(common.lemmas),cum.model,simplify = FALSE)) %>%
+  gather(model,r2,norwegian:both)
+
+r2.check <- filter(r2s,measure=="produces",model == "freq")
+
+
+ggplot(r2s,aes(x = order.num,y=r2,color=model)) +
+  facet_wrap(~ measure) + 
+  geom_point()
+
+
+model <- lm(English~ frequency*category,data=filter(eng.data,measure=="produces"))
+model2 <- lm(English~ Norwegian,data=filter(eng.data,measure=="produces"))
+
+cor.test(filter(eng.data,measure=="produces")$order,filter(eng.data,measure=="produces")$freq.order,method="kendall")
+
+```
+
+```{r}
+ggplot(baseline.order.data, 
+       aes(x = mean.order, y = mean.order.diff, color = language)) +
+  facet_wrap(~ measure) +
+  geom_jitter() +
+  scale_color_brewer(palette = "Spectral") +
+  theme_bw() +
+  theme(text = element_text(family = "Open Sans"))
+```
+
+```{r}
+measure.diff <- order.mean.data %>%
+  select(-mean.order, -prop) %>%
+  spread(measure, order) %>%
+  group_by(language, uni_lemma) %>%
+  mutate(measure.diff = abs(produces - only.understands)) %>%
+  group_by(language) %>%
+  arrange(only.understands) %>%
+  mutate(mean.measure.diff = cumsum(measure.diff))
+```
+
+```{r}
+ggplot(measure.diff, aes(x = only.understands, y = mean.measure.diff, color = language)) +
+  geom_point() +
+  scale_color_brewer(palette = "Set1") +
+  theme_bw() +
+  theme(text = element_text(family = "Open Sans"))
+```
+
+```{r}
 kids.by.lang <- vocab.data %>%
   group_by(language) %>%
   summarise(num.kids = n())
