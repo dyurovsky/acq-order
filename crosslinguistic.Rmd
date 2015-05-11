@@ -124,7 +124,7 @@ order.data <- all.data %>%
   ungroup() %>%
   filter(uni_lemma %in% common.lemmas) %>%
   mutate(language = factor(language)) %>%
-  group_by(language, lexical_category,category, uni_lemma,item_id) %>%
+  group_by(language, lexical_category, uni_lemma,item_id) %>%
   summarise(produces = mean(value == "produces"),
             understands = mean(value == "produces" | value == "understands"),
             only.understands = mean(value == "understands")) %>%
@@ -188,24 +188,26 @@ eng.freqs <- read.csv('english.freqs.csv') %>%
   ungroup() %>%
   mutate(word = str_trim(tolower(gsub('\\.', ' ', word))))
 
+eng.cats <- all.data %>%
+  filter(language=="English") %>%
+  select(uni_lemma,category,lexical_category) %>%
+  distinct() %>%
+  filter(uni_lemma %in% common.lemmas)
+
 freqs.data <- order.mean.data %>%
-  select(-prop,-mean.order) %>%
-  spread(language,order) %>%
-  group_by(language,measure,uni_lemma) %>%
-  
-  filter(uni_lemma %in% common.lemmas) %>%
+  select(-order,-mean.order,-lexical_category) %>%
+  spread(language,prop) %>%
+  left_join(eng.cats) %>%
   mutate(word = gsub(' \\(.*\\)', '', uni_lemma)) %>%
   left_join(eng.freqs) %>%
   filter(!is.na(frequency)) %>%
   group_by(measure) %>%
-  mutate(freq.order = rank(-frequency)) %>%
-  left_join(unilemma.order)
+  arrange(desc(English))
 
-freqs.prod.data <- filter(freqs.data,measure=="produces")
-
-model.norwegian <- lm(English ~ Norwegian,data=measure.data))$r.squared
-
-
+freqs.models <- freqs.data %>%
+  do(lm.freq = glm(English~category*frequency,family="binomial",data=.),
+     lm.nor = glm(English~Norwegian,family="binomial",data=.))
+  
 cum.model <- function(order.num) {
 
   nor.r2 <- function(measure.data) {summary(lm(English ~ Norwegian,
@@ -218,9 +220,10 @@ cum.model <- function(order.num) {
     summary(lm(English ~ Norwegian + freq.order*category, 
                data=measure.data))$r.squared} 
   
-  freqs.data %>%
+  tmp <- freqs.data %>%
     group_by(measure) %>%
     slice(1:order.num) %>%
+    summarise(pred.freq = cor(predict(freqs.models$lm.freq[[1]],newdata = .),English))
     do(norwegian = nor.r2(.),
        freq = freq.r2(.),
        both = both.r2(.)) %>%
