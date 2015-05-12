@@ -67,7 +67,7 @@ get.language.data <- function(lang, vocab.data) {
   
   words <- items %>%
     filter(type == "word", language == lang, form == "WG") %>%
-    select(definition,item.id,uni_lemma,category,lexical_category) %>%
+    select(definition, item.id, uni_lemma, category, lexical_category) %>%
     rename(item_id = item.id)
   
   lang.data <- lang.table %>%
@@ -79,7 +79,7 @@ get.language.data <- function(lang, vocab.data) {
     mutate(value = ifelse(is.na(value), "", value)) %>%
     left_join(vocab.data)
   
-  return(left_join(lang.data,words))
+  return(left_join(lang.data, words))
 
   }
 ```
@@ -116,7 +116,8 @@ all.data <- bind_rows(sapply(languages,
                              function(lang) get.language.data(lang,vocab.admins),
                              simplify = FALSE))
 
-get.lang.lemmas <- function(lang) unique(filter(all.data, language == lang)$uni_lemma)
+get.lang.lemmas <- function(lang) unique(filter(all.data,
+                                                language == lang)$uni_lemma)
 common.lemmas <- Reduce(intersect, sapply(languages, get.lang.lemmas))
 ```
 
@@ -163,8 +164,8 @@ baseline.order.data <- order.mean.data %>%
   group_by(language, measure) %>%
   arrange(mean.order) %>%
   mutate(mean.order.diff = cumsum(order.diff))
-# 
-# 
+
+ 
 # cum.tau <- function(order.num) {
 #   
 #   order.mean.data %>%
@@ -196,44 +197,61 @@ eng.cats <- all.data %>%
   filter(uni_lemma %in% common.lemmas)
 
 freqs.data <- order.mean.data %>%
-  select(-order,-mean.order,-lexical_category) %>%
-  spread(language,prop) %>%
+ # select(-order,-mean.order,-lexical_category) %>%
+  select(-prop,-mean.order,-lexical_category) %>%
+#  spread(language,prop) %>%
+  spread(language,order) %>%
   left_join(eng.cats) %>%
   mutate(word = gsub(' \\(.*\\)', '', uni_lemma)) %>%
   left_join(eng.freqs) %>%
   filter(!is.na(frequency)) %>%
   group_by(measure) %>%
-  arrange(desc(English))
+  arrange(English)
+#  arrange(desc(English))
+
+# freqs.models <- freqs.data %>%
+#   do(lm.freq = glm(English ~ category * frequency, family="binomial", data=.),
+#      lm.nor = glm(English ~ Norwegian, family="binomial", data=.))
 
 freqs.models <- freqs.data %>%
-  do(lm.freq = glm(English~category*frequency,family="binomial",data=.),
-     lm.nor = glm(English~Norwegian,family="binomial",data=.))
+  do(lm.freq = lm(English ~ category * frequency,data=.),
+     lm.nor = lm(English ~ Norwegian, data=.))
   
-cum.model <- function(order.num) {
-  
-  get.model <- function(select.measure,model) {
-    filter(freqs.models,measure==select.measure)[[model]][[1]]
-  }
-  
-  order.model.data <- freqs.data %>%
-    group_by(measure) %>%
-    slice(1:order.num) %>%
-    group_by(measure) %>%
-    mutate(predicted.freq = inv.logit(predict(get.model(unique(.$measure),"lm.freq"),
-                                       newdata = filter(.,measure==unique(.$measure)))),
-           predicted.nor = inv.logit(predict(get.model(unique(.$measure),"lm.nor"),
-                                       newdata = filter(.,measure==unique(.$measure)))))
+get.model <- function(select.measure, model_type) {
+  filter(freqs.models, measure == select.measure)[[model_type]][[1]]
 }
 
-
+cum.model <- function(order.num,cum) {
   
-r2s <- bind_rows(sapply(10:length(common.lemmas),cum.model,simplify = FALSE)) %>%
-  gather(model,r2,norwegian:both)
+  get.prediction.cor <- function(model_type, meas, group_data) {
+    filtered_data <- filter(group_data, measure == meas)
+#     predicted = inv.logit(predict(get.model(meas, model_type),
+#                                   newdata = filtered_data))
+    predicted = predict(get.model(meas, model_type),
+                              newdata = filtered_data)
+    cor(filtered_data$English, predicted)
+  }
 
-r2.check <- filter(r2s,measure=="produces",model == "freq")
+  order.model.data <- freqs.data %>%
+    group_by(measure) %>%
+    filter(row_number() <= order.num) %>%
+    summarise(freq = get.prediction.cor("lm.freq", unique(measure), .),
+              nor = get.prediction.cor("lm.nor", unique(measure), .)) %>%
+    mutate(order.num = order.num)
+}
 
+cors <- bind_rows(sapply(2:length(common.lemmas),cum.model,simplify = FALSE)) %>%
+  gather(model,cor,freq,nor)
 
-ggplot(r2s,aes(x = order.num,y=r2,color=model)) +
+prod.data <- filter(freqs.data,measure=="understands") %>%
+  mutate(predicted = predict(get.model("produces","lm.freq"))) %>%
+  mutate(diff = (English - predicted))
+  
+
+ggplot(prod.data,aes(x=English,y=diff))+
+  geom_text(aes(label=uni_lemma))
+
+ggplot(cors,aes(x = order.num,y=cor,color=model)) +
   facet_wrap(~ measure) + 
   geom_point()
 
