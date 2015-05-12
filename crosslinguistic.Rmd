@@ -18,6 +18,7 @@ opts_chunk$set(message=FALSE, warning=FALSE, cache=TRUE)
 
 Load required libraries.
 ```{r librares, cache=FALSE}
+library(boot)
 library(dplyr)
 library(directlabels)
 library(RMySQL)
@@ -209,29 +210,19 @@ freqs.models <- freqs.data %>%
      lm.nor = glm(English~Norwegian,family="binomial",data=.))
   
 cum.model <- function(order.num) {
-
-  nor.r2 <- function(measure.data) {summary(lm(English ~ Norwegian,
-                                            data=measure.data))$r.squared} 
   
-  freq.r2 <- function(measure.data) {summary(lm(English~freq.order*category,
-                                             data=measure.data))$r.squared} 
+  get.model <- function(select.measure,model) {
+    filter(freqs.models,measure==select.measure)[[model]][[1]]
+  }
   
-  both.r2 <- function(measure.data) {
-    summary(lm(English ~ Norwegian + freq.order*category, 
-               data=measure.data))$r.squared} 
-  
-  tmp <- freqs.data %>%
+  order.model.data <- freqs.data %>%
     group_by(measure) %>%
     slice(1:order.num) %>%
-    summarise(pred.freq = cor(predict(freqs.models$lm.freq[[1]],newdata = .),English))
-    do(norwegian = nor.r2(.),
-       freq = freq.r2(.),
-       both = both.r2(.)) %>%
-   # mutate(order.num=order.num)
-    mutate(norwegian = norwegian[[1]],
-           freq = freq[[1]],
-           both = both[[1]],
-           order.num = order.num)
+    group_by(measure) %>%
+    mutate(predicted.freq = inv.logit(predict(get.model(unique(.$measure),"lm.freq"),
+                                       newdata = filter(.,measure==unique(.$measure)))),
+           predicted.nor = inv.logit(predict(get.model(unique(.$measure),"lm.nor"),
+                                       newdata = filter(.,measure==unique(.$measure)))))
 }
 
 
