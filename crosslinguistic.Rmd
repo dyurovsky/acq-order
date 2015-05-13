@@ -182,6 +182,7 @@ baseline.order.data <- order.mean.data %>%
 #   geom_point()
 ```
 
+Get frequency data and merge.
 ```{r}
 eng.freqs <- read.csv('english.freqs.csv') %>%
   gather(word, count) %>%
@@ -208,9 +209,12 @@ freqs.data <- order.mean.data %>%
   group_by(measure) %>%
   arrange(English)
   #arrange(desc(English))
+```
 
+Do models and plot. 
+```{r}
 freqs.models <- freqs.data %>%
-  do(lm.freq = lm(English ~ category * log(1000*frequency), 
+  do(lm.freq = lm(English ~ category + log(1000*frequency), 
                    data=.),
      lm.nor = lm(English ~ Norwegian, data=.))
 
@@ -222,46 +226,63 @@ get.model <- function(select.measure, model_type) {
   filter(freqs.models, measure == select.measure)[[model_type]][[1]]
 }
 
-cum.model <- function(order.num,cum) {
-  
-  get.prediction.cor <- function(model_type, meas, group_data) {
+get.prediction.lm.cor <- function(model_type, meas, group_data) {
     filtered_data <- filter(group_data, measure == meas)
     predicted = (predict(get.model(meas, model_type),
                                   newdata = filtered_data))
 #     predicted = predict(get.model(meas, model_type),
 #                               newdata = filtered_data)
-    cor(filtered_data$English, predicted)
-  }
+    cor(filtered_data$English, predicted, method="spearman")
+}
 
+cum.model <- function(order.num, cum) {
+  
   order.model.data <- freqs.data %>%
     group_by(measure) %>%
     filter(row_number() <= order.num) %>%
-    summarise(freq = get.prediction.cor("lm.freq", unique(measure), .),
-              nor = get.prediction.cor("lm.nor", unique(measure), .)) %>%
+#       filter(row_number() >= order.num - 10,
+#              row_number() <= order.num + 10) %>%
+    summarise(freq = get.prediction.lm.cor("lm.freq", unique(measure), .),
+              nor = get.prediction.lm.cor("lm.nor", unique(measure), .)) %>%
     mutate(order.num = order.num)
 }
 
-cors <- bind_rows(sapply(seq(1,length(common.lemmas),1),cum.model,simplify = FALSE)) %>%
-  gather(model,cor,freq,nor)
+cors <- bind_rows(sapply(seq(1, length(common.lemmas), 1),
+                         cum.model, simplify = FALSE)) 
+  
 
-prod.data <- filter(freqs.data,measure=="produces") %>%
+qplot(order.num, nor - freq, colour= measure, 
+      geom = "point", 
+      data=filter(cors, measure == "produces"))
+
+# ## now plot actuals
+# cors.data <-  cors %>% 
+#   gather(model,cor,freq,nor)
+# 
+# ggplot(cors, aes(x = order.num, y=cor, color=model)) +
+#   facet_wrap(~ measure) + 
+#   geom_smooth() +
+#   geom_point() +
+# #   xlim(c(0,100)) + 
+#   theme_bw()
+
+
+
+```
+
+
+```{r}
+prod.data <- filter(freqs.data, measure=="produces") %>%
   mutate(freq = inv.logit(predict(get.model("produces","lm.freq"))),
          nor = inv.logit(predict(get.model("produces","lm.nor")))) %>%
   gather(model,predicted,freq:nor) %>%
   group_by(measure,model) %>%
   mutate(resid = (English - predicted),
          order = rank(-English))
-  
 
-ggplot(prod.data,aes(x=order,y=resid,color=model))+
+ggplot(prod.data, aes(x=order,y=resid,color=model))+
   geom_point() +
   theme_bw()
-
-ggplot(cors,aes(x = order.num,y=cor,color=model)) +
-  facet_wrap(~ measure) + 
-  geom_smooth() +
-  theme_bw()
-
 
 model <- lm(English~ frequency*category,data=filter(eng.data,measure=="produces"))
 model2 <- lm(English~ Norwegian,data=filter(eng.data,measure=="produces"))
