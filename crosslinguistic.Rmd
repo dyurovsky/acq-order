@@ -111,7 +111,7 @@ Look at age distributions
 
 Get all data
 ```{r}
-languages <- c("English", "Norwegian", "Croatian", "Spanish")
+languages <- c("English", "Norwegian", "Croatian", "Spanish","Turkish")
 all.data <- bind_rows(sapply(languages, 
                              function(lang) get.language.data(lang,vocab.admins),
                              simplify = FALSE))
@@ -126,7 +126,7 @@ order.data <- all.data %>%
   ungroup() %>%
   filter(uni_lemma %in% common.lemmas) %>%
   mutate(language = factor(language)) %>%
-  group_by(language, lexical_category, uni_lemma,item_id) %>%
+  group_by(language, uni_lemma,item_id) %>%
   summarise(produces = mean(value == "produces"),
             understands = mean(value == "produces" | value == "understands"),
             only.understands = mean(value == "understands")) %>%
@@ -198,7 +198,7 @@ eng.cats <- all.data %>%
 
 freqs.data <- order.mean.data %>%
  # select(-order,-mean.order,-lexical_category) %>%
-  select(-prop,-mean.order,-lexical_category) %>%
+  select(-prop,-mean.order) %>%
 #  spread(language,prop) %>%
   spread(language,order) %>%
   left_join(eng.cats) %>%
@@ -207,15 +207,16 @@ freqs.data <- order.mean.data %>%
   filter(!is.na(frequency)) %>%
   group_by(measure) %>%
   arrange(English)
-#  arrange(desc(English))
-
-# freqs.models <- freqs.data %>%
-#   do(lm.freq = glm(English ~ category * frequency, family="binomial", data=.),
-#      lm.nor = glm(English ~ Norwegian, family="binomial", data=.))
+  #arrange(desc(English))
 
 freqs.models <- freqs.data %>%
-  do(lm.freq = lm(English ~ category * frequency,data=.),
+  do(lm.freq = lm(English ~ category * log(1000*frequency), 
+                   data=.),
      lm.nor = lm(English ~ Norwegian, data=.))
+
+# freqs.models <- freqs.data %>%
+#   do(lm.freq = lm(English ~ category * frequency,data=.),
+#      lm.nor = lm(English ~ Norwegian, data=.))
   
 get.model <- function(select.measure, model_type) {
   filter(freqs.models, measure == select.measure)[[model_type]][[1]]
@@ -225,10 +226,10 @@ cum.model <- function(order.num,cum) {
   
   get.prediction.cor <- function(model_type, meas, group_data) {
     filtered_data <- filter(group_data, measure == meas)
-#     predicted = inv.logit(predict(get.model(meas, model_type),
-#                                   newdata = filtered_data))
-    predicted = predict(get.model(meas, model_type),
-                              newdata = filtered_data)
+    predicted = (predict(get.model(meas, model_type),
+                                  newdata = filtered_data))
+#     predicted = predict(get.model(meas, model_type),
+#                               newdata = filtered_data)
     cor(filtered_data$English, predicted)
   }
 
@@ -240,20 +241,26 @@ cum.model <- function(order.num,cum) {
     mutate(order.num = order.num)
 }
 
-cors <- bind_rows(sapply(2:length(common.lemmas),cum.model,simplify = FALSE)) %>%
+cors <- bind_rows(sapply(seq(1,length(common.lemmas),1),cum.model,simplify = FALSE)) %>%
   gather(model,cor,freq,nor)
 
-prod.data <- filter(freqs.data,measure=="understands") %>%
-  mutate(predicted = predict(get.model("produces","lm.freq"))) %>%
-  mutate(diff = (English - predicted))
+prod.data <- filter(freqs.data,measure=="produces") %>%
+  mutate(freq = inv.logit(predict(get.model("produces","lm.freq"))),
+         nor = inv.logit(predict(get.model("produces","lm.nor")))) %>%
+  gather(model,predicted,freq:nor) %>%
+  group_by(measure,model) %>%
+  mutate(resid = (English - predicted),
+         order = rank(-English))
   
 
-ggplot(prod.data,aes(x=English,y=diff))+
-  geom_text(aes(label=uni_lemma))
+ggplot(prod.data,aes(x=order,y=resid,color=model))+
+  geom_point() +
+  theme_bw()
 
 ggplot(cors,aes(x = order.num,y=cor,color=model)) +
   facet_wrap(~ measure) + 
-  geom_point()
+  geom_smooth() +
+  theme_bw()
 
 
 model <- lm(English~ frequency*category,data=filter(eng.data,measure=="produces"))
@@ -267,7 +274,7 @@ cor.test(filter(eng.data,measure=="produces")$order,filter(eng.data,measure=="pr
 ggplot(baseline.order.data, 
        aes(x = mean.order, y = mean.order.diff, color = language)) +
   facet_wrap(~ measure) +
-  geom_jitter() +
+  geom_point() +
   scale_color_brewer(palette = "Spectral") +
   theme_bw() +
   theme(text = element_text(family = "Open Sans"))
