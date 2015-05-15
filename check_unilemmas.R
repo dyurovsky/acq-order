@@ -23,9 +23,13 @@ spa.wg <- spa.wg[,1:(ncol(spa.wg)-1)] %>%
 tur.wg <- read_csv('[Turkish_WG].csv') %>%
   mutate(language = "Turkish")
 
+swe.wg <- read_csv('[Swedish_WG].csv') %>%
+  mutate(language = "Swedish")
 
-diff <- bind_rows(anti_join(tur.wg,eng.wg, by = "uni_lemma"),
-                  anti_join(eng.wg,tur.wg, by = "uni_lemma")) %>%
+
+
+diff <- bind_rows(anti_join(swe.wg,eng.wg, by = "uni_lemma"),
+                  anti_join(eng.wg,swe.wg, by = "uni_lemma")) %>%
   select(language,uni_lemma,definition,category) %>%
   arrange(uni_lemma)
 
