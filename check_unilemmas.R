@@ -26,10 +26,17 @@ tur.wg <- read_csv('[Turkish_WG].csv') %>%
 swe.wg <- read_csv('[Swedish_WG].csv') %>%
   mutate(language = "Swedish")
 
+rus.wg <- read_csv('[Russian_WG].csv') %>%
+  filter(type == "word") %>%
+  mutate(language = "Russian")
+
+heb.wg <- read_excel('[Hebrew_WG].xlsx') %>%
+  filter(!is.na(uni_lemma)) %>%
+  mutate(language = "Hebrew")
 
 
-diff <- bind_rows(anti_join(swe.wg,eng.wg, by = "uni_lemma"),
-                  anti_join(eng.wg,swe.wg, by = "uni_lemma")) %>%
+diff <- bind_rows(anti_join(heb.wg, eng.wg, by = "uni_lemma"),
+                  anti_join(eng.wg, heb.wg, by = "uni_lemma")) %>%
   select(language,uni_lemma,definition,category) %>%
   arrange(uni_lemma)
 
