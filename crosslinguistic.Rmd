@@ -29,6 +29,7 @@ library(RCurl)
 library(magrittr)
 library(readr)
 library(stringr)
+library(PerformanceAnalytics)
 ```
 
 Get a script that provides interface functions for pulling data out of Wordbank.
@@ -56,7 +57,7 @@ Filter down to appropriate kids
 ```{r}
 vocab.admins <- admins %>%
   select(data_id, language, form, age, sex, production) %>%
-  filter(form == "WG", !is.na(sex), sex != "", age >= 8, age <=18)
+  filter(form == "WG")
 ```
 
 Function that get's one language's data from wordbank
@@ -86,8 +87,9 @@ get.language.data <- function(lang, vocab.data) {
 
 Get all data
 ```{r}
-languages <- c("English", "Norwegian", "Croatian", 
-               "Spanish","Swedish","Turkish")
+languages <- c("English", "Norwegian", "Croatian", "Hebrew",
+               "Russian","Spanish","Swedish","Turkish")
+
 all.data <- bind_rows(sapply(languages, 
                              function(lang) get.language.data(lang,vocab.admins),
                              simplify = FALSE))
@@ -150,24 +152,43 @@ baseline.order.data <- order.mean.data %>%
   mutate(mean.order.diff = cumsum(order.diff))
 ```
 
+Pairwise correlations
+```{r}
+pairwise.corr.data <- baseline.order.data %>%
+  filter(measure == "produces") %>%
+  select(prop,language,uni_lemma) %>%
+  spread(language,prop) %>%
+  select(Croatian:Turkish) %>%
+  cor %>%
+  as.data.frame 
+
+pairwise.corr.data$language1 <- row.names(pairwise.corr.data) 
+
+pairwise.corr.data %<>%
+  gather(language2,cor,Croatian:Turkish) %>%
+  filter(language1 != language2)
+
+min(pairwise.corr.data$cor)
+```
 Plot cross-linguistic acquisition order
 ```{r}
 aq.order.data <- baseline.order.data %>%
   filter(measure == "produces")
 
-quartz(width = 5.5,height = 3.3)
+quartz(width = 4,height = 3.3)
 ggplot(aq.order.data, 
        aes(x = mean.order, y = mean.order.diff, 
            color = language, fill = language,
            label=language)) +
   geom_point(size=.8) +
   geom_smooth(method="loess")+
-  geom_dl(method = list(dl.trans(x=x +.2), "last.bumpup", cex=.85))+ 
-  scale_color_brewer(palette = "Set2") +
-  scale_fill_brewer(palette = "Set2") +
-  scale_x_continuous(limits = c(0,210),breaks = seq(0,180,20),
+  geom_dl(method = list(dl.trans(x=x +.15), "last.bumpup", cex=.7))+ 
+  scale_color_brewer(palette = "Dark2") +
+  scale_fill_brewer(palette = "Dark2") +
+  scale_x_continuous(limits = c(0,150),breaks = seq(0,140,20),
                      name = "Mean Cross-Linguistic Acquisition Order")+
-  scale_y_continuous(name = "Cumulative Difference from Mean Order")+
+  scale_y_continuous(name = "Cumulative Difference from Mean Order",
+                     limits = c(0,3200),breaks=seq(0,3200,400))+
   theme_bw(base_size=11) +
   theme(panel.grid = element_blank(), legend.position="none")
 ```
@@ -242,7 +263,7 @@ cum.model <- function(order.num) {
   mutate(order.num = order.num)
 }
 
-cors <- bind_rows(sapply(seq(3, length(common.lemmas), 1),
+cors <- bind_rows(sapply(seq(10, length(common.lemmas), 1),
                          cum.model, simplify = FALSE)) %>%
     gather(model,cor,freq,lang)
   
@@ -256,23 +277,40 @@ cors.plot.data <- cors %>%
 
 Plot predictive models
 ```{r}
-quartz(width = 4.5,height = 3.3)
+quartz(width = 4,height = 3.3)
 ggplot(cors.plot.data, 
        aes(x = order.num, y = cor, 
            color = model, fill=model,label=model)) +
   geom_point(size=1) +
   geom_smooth(method="loess",span=.25)+
-  geom_dl(method = list(dl.trans(x=x +.2), "last.bumpup", cex=.85))+ 
+  geom_dl(method = list(dl.trans(x=x +.2), "smart.grid", cex=.8))+ 
   scale_color_brewer(palette = "Set1") +
   scale_fill_brewer(palette = "Set1") +
-  scale_x_continuous(limits = c(0,270),breaks = seq(0,180,20),
+  scale_x_continuous(limits = c(0,140),breaks = seq(0,140,20),
                      name = "English Acquisition Order")+
   scale_y_continuous(name = "Cumulative Correlation with English Order",
-                     limits = c(-1,1),breaks=seq(-1,1,.25))+
+                     limits = c(-.1,1),breaks=seq(-1,1,.25))+
   theme_bw(base_size=11) +
   theme(panel.grid = element_blank(), legend.position="none")
 ```
 
+Top words
+```{r}
+top.words <- baseline.order.data %>%
+  group_by(language) %>%
+  arrange(desc(prop)) %>%
+  slice(1:10) %>%
+  select(language,uni_lemma,prop)
+
+tab.words <- top.words %>%
+  mutate(order = 1:10) %>%
+  rowwise() %>%
+  select(language,uni_lemma,order) %>%
+  spread(language,uni_lemma) %>%
+  select(-order)
+
+kable(tab.words)
+```
 
 ```{r}
 prod.data <- filter(freqs.data, measure=="produces") %>%
